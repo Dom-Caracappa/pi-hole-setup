@@ -1,0 +1,454 @@
+# Setting Up a Pi-Hole
+
+Turning your Raspberry Pi 4 into a Pi-hole server (and potentially expanding it to run other network services like DHCP, Unbound, or even a local dashboard) is a fantastic way to improve your home network and learn about networking fundamentals.
+
+## Table of Contents
+
+- [Phase 1: Prep and Plan](#phase-1-prep-and-plan)
+- [Phase 2: Install the OS](#phase-2-install-the-os)
+- [Phase 3: Install Pi-hole](#phase-3-install-pihole)
+- [Phase 4: Route Traffic Through Pi-hole](#phase-4-route-traffic-through-pi-hole)
+- [Workaround Options](#troubleshooting-what-if-your-router-doesnt-allow-custom-dns)
+
+
+## Phase 1: Prep and Plan
+
+What is needed:
+
+- Raspberry Pi 4 (2GB+ recommended)
+
+- microSD card (8GB minimum, 16–32GB recommended)
+
+- Ethernet cable (highly recommended for stability)
+
+- Power supply
+
+- Access to your router's admin panel
+
+- Optional: External USB drive (for expanded services)
+
+
+## Phase 2: Install the OS
+
+We're using Raspberry Pi OS Lite — a headless version of the OS that reduces resource overhead.
+
+### 2a: Flash the OS
+
+Use Raspberry Pi Imager and:
+
+- Select Raspberry Pi OS Lite (64-bit)
+
+- Enable SSH (in advanced settings)
+
+- Set your Wi-Fi credentials if not using Ethernet
+
+
+### 2b: Boot the Pi
+
+Insert the SD card, power it on, and connect via SSH:
+
+```bash
+ssh pi@<IP_ADDRESS>
+```
+
+Find the IP in the router admin panel, or using a program like **Angry IP Scanner**.
+
+
+## Phase 3: Install PiHole
+
+### 3a: Update System
+
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+### 3b: Configure Static IP Address
+
+In the router's admin panel, find the device and assign it a static IP address.
+
+### 3c: Install Unbound
+
+For privacy, we're installing *Unbound*, which will be used as our private recursive DNS resolver.
+
+```bash
+sudo apt install unbound -y
+```
+
+##### 3c1: Add the Pi-Hole Configuration for Unbound
+
+Create a config file for Unbound:
+
+```bash
+sudo nano /etc/unbound/unbound.conf.d/pi-hole.conf
+```
+
+Paste the following config (optimized for Pi-hole):
+
+```bash
+server:
+    verbosity: 0
+    interface: 127.0.0.1
+    port: 5335
+    do-ip4: yes
+    do-udp: yes
+    do-tcp: yes
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    use-caps-for-id: no
+    edns-buffer-size: 1232
+    prefetch: yes
+    num-threads: 1
+    so-rcvbuf: 1m
+    so-sndbuf: 1m
+    cache-min-ttl: 3600
+    cache-max-ttl: 86400
+    rrset-roundrobin: yes
+    minimal-responses: yes
+    serve-expired: yes
+
+    # Only allow queries from localhost
+    access-control: 127.0.0.0/8 allow
+```
+
+Restart Unbound:
+
+```bash
+sudo systemctl restart unbound
+```
+
+### 3d: Install PiHole Packages
+
+Use the official install script:
+
+```bash
+curl -sSL https://install.pi-hole.net | bash
+```
+
+You'll be guided through an interactive installer. Here’s what to watch for:
+
+#### 3d1: Installer Start Screen
+
+The installer will inform you that it will transform your device into a network-wide ad blocker. Select `Ok`.
+
+#### 3d2: Open Source Donation Screen
+
+Next, a message asking for a donation to the project. Select `ok`.
+
+#### 3d3: Static IP Needed
+
+If these directions are being followed in order, we have already assigned our Pi-Hole device a static IP address. Select `Continue`.
+
+#### 3d4: Choose an Interface
+
+If possible, use the ethernet option. Select `eth0`.
+
+
+#### 3d5: Select Upstream DNS Provider
+
+This is where *Unbound* comes in. 
+
+
+- First, Select `Custom`.
+- On the next screen, "Enter your desired upstream DNS provider(s)...", enter:
+
+```bash
+127.0.0.1#5335
+```
+Then select, `Ok`.
+
+This tells Pi-hole to forward DNS queries to localhost on port 5335, where Unbound is listening.
+
+- On the next screen, confirm your settings and select `Yes`.
+
+#### 3d6: Blocklists 
+
+The next screen asks whether to pre-load the default ad-blocking list:
+
+> StevenBlack’s Unified Hosts List
+This is a well-maintained, general-purpose blocklist that blocks ads, tracking, and malware domains.
+
+Select `Yes`.
+
+- This gives you instant protection out of the box.
+- We can add more specific lists later in the Admin Panel.
+
+#### 3d7: Enable Blocking
+
+This screen determines whether Pi-hole will keep track of DNS queries.
+
+Enabled (`Yes`): Pi-hole logs each DNS request made on your network. This lets you:
+
+- See which devices are talking to which domains
+
+- Debug issues (e.g., ads not blocking, failed lookups)
+
+- View top domains, clients, blocked requests in the admin UI
+
+Disabled (`No`): Pi-hole won’t keep any query history. Slightly more private, but you lose visibility into what’s happening on your network.
+
+It is recommended that we choose `Yes`, especially if:
+
+- This is your first Pi-Hole.
+- You want to quickly confirm your Pi-Hole is working.
+- You want to tweak blocklists later.
+
+This can easily be changed later in the Admin Panel:
+
+```
+pihole logging on
+pihole logging off
+```
+
+Or by adjusting privacy levels via the web UI.
+
+#### 3d8: Privacy Mode Selection
+
+Next is the Privacy Mode selection screen for Pi-hole's FTL (Fast Telemetry Logger) engine.
+
+**Our Options**
+
+| Level                               | Description                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| **0 – Show everything** *(default)* | Logs all domains and clients. Great for visibility, debugging, and stats.                  |
+| 1 – Hide domains                    | Hides what sites are being queried, but still shows which client made the request.         |
+| 2 – Hide domains and clients        | You only see how many queries occurred.                                                    |
+| 3 – Anonymous mode                  | Hides everything: domains, clients, and reduces logging. Only basic functionality remains. |
+
+**Recommendation**
+
+Stick with:
+
+    [*] Show everything
+
+Since:
+
+- You're testing Pi-hole + Unbound
+
+- You’ll want insight into which clients are hitting what domains
+
+- You can always change this later via:
+
+```
+pihole -a -i 0  # or 1, 2, 3 depending on privacy level
+```
+
+Select `Continue` to proceed.
+
+#### 3b9: Installation Complete
+
+This screen tells us that everything was successfully installed and configured. Select `Ok`. Next, we'll move on to testing and further configuration of our DNS.
+
+Make sure to record the password.
+
+### 3e: Accessing the Admin Panel
+
+From any browser, go to:
+
+```
+http://<your_pi_ip_address>/admin
+```
+Login using the password from the `Installation Complete` screen. If you missed it, or want to change the password, enter the following into the SSH session:
+
+```
+sudo pihole setpassword
+```
+
+#### 3e1: Enable SSH
+
+Above the `Password` field is the option to use SSH for end-to-end encryption. Click it and then click "proceed" when the browser loads the security warning. 
+
+#### 3e2: Login
+
+Using our password, login to the Admin Panel
+
+#### 3e3: Fix `Domains on List` Error
+
+If there’s a small error with the blocklists (Error -2) — likely because the lists haven't been pulled down yet.
+
+SSH back into the Pi-Hole and run:
+
+```
+pihole -g
+```
+Then press `Enter`.
+
+## Phase 4: Route Traffic Through Pi-Hole
+
+When you set your router’s Primary DNS to your Pi-hole (e.g.,<your_pi_ip_address>), you're telling your router:
+
+> “Every device that connects to this network should ask this machine (the Pi-hole) to resolve domain names.”
+
+So instead of your devices going to Google, Cloudflare, or your ISP’s DNS to resolve domains, they go to your Pi-hole → which checks your blocklists → then (optionally) passes allowed queries to Unbound.
+
+### Step 1: Log into your Router
+
+Access your router's admin panel.
+
+### Step 2: Find the LAN / DHCP / DNS Section
+
+The exact steps are dependent on your router, but generally, you're looking for something like:
+
+- LAN Settings
+
+- Local Network
+
+- DHCP Server
+
+- DNS Settings
+
+We're looking for two fields labeled:
+
+- Primary DNS Server
+
+- Secondary DNS Server
+
+### Step 3. Enter your Pi-hole’s IP address
+
+Set:
+
+- Primary DNS: `<your_pi_ip_address>`
+
+- Leave Secondary DNS blank (or use Pi-hole again)
+
+
+#### Troubleshooting: ⚠️ What If Your Router Doesn’t Allow Custom DNS?
+
+Some routers — particularly ISP-provided models — do not let you set a custom DNS server on the LAN side. This means you can’t instruct your router to hand out your Pi-hole IP as the DNS server via DHCP.
+
+Luckily, there are three common workarounds, each with their pros and cons:
+
+##### Workaround Option 1: Use Pi-hole as the DHCP Server (Recommended for Beginners)
+
+Instead of relying on your router to assign IP addresses and DNS servers, you can disable DHCP on your router (if possible) and enable it in Pi-hole.
+
+**Steps**
+
+1. Go to the Pi-hole Admin Console > `Settings > DHCP`
+
+2. Enable the DHCP server
+
+3. Set the following values:
+
+    - Start: `<your_dhcp_range_start>`
+
+    - End: `<your_dhcp_range_end>`
+    
+    - Router (Gateway): `<your_gateway_ip>`
+    
+    > **Example:** If your router’s IP is 192.168.1.1, a typical DHCP range might be:
+	
+	> **Start:** 192.168.1.50
+
+    > **End:** 192.168.1.250
+
+    > **Gateway:** 192.168.1.1
+
+4. Leave the Netmask field empty unless your network requires a specific one (most home routers use 255.255.255.0)
+
+5. Click Save and Apply
+
+> **Important:** Only one device on your network should act as the DHCP server. If you enable DHCP on Pi-hole, be sure to disable it on your router (if allowed). If your router doesn't allow DHCP to be disabled, Pi-hole may still "win" DHCP negotiations if it's faster — but this setup is less reliable and may require static IPs for key devices. 
+
+##### Workaround Option 2: Manually Set DNS on Individual Devices
+
+If you're unable to change DNS settings on your router — or just want to test Pi-hole before committing to a full network rollout — you can manually configure each device to use Pi-hole as its DNS server.
+
+This method works especially well for laptops, phones, tablets, and streaming devices that support custom DNS settings.
+
+
+
+| **Device**               | **Navigation Path**                                                                          | **DNS Setting**                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **macOS**                | System Settings → Network → Wi-Fi → Details (ⓘ) → DNS                                        | Add `<your_pi_ip_address>`                                         |
+| **iPhone / iPad**        | Settings → Wi-Fi → Tap (ⓘ) → Configure DNS → Manual                                          | Add `<your_pi_ip_address>`                                         |
+| **Android**              | Settings → Network & Internet → Internet → \[Your Network] → Advanced → IP Settings → Static | DNS 1: `<your_pi_ip_address>`<br>DNS 2: optional (e.g., `1.1.1.1`) |
+| **Windows 10/11**        | Settings → Network & Internet → Wi-Fi → Hardware Properties → Edit IP settings → Manual      | Preferred DNS: `<your_pi_ip_address>`<br>Alternate DNS: optional   |
+| **Linux (GNOME)**        | Settings → Network → Wired/Wi-Fi → Settings → IPv4 → Manual DNS                              | Add `<your_pi_ip_address>`                                         |
+| **Smart TVs / Consoles** | Usually under Network Settings → Advanced or Manual Setup                                    | Add `<your_pi_ip_address>`                                         |
+
+
+> **Things to Keep in Mind**
+
+> Make sure to replace <your_pi_ip_address> with the actual static IP address you assigned to your Pi-hole (for example, 192.168.1.100 or 10.0.0.185).
+
+> After setting the DNS, it is recommended to restart the device or disconnect and reconnect to the network to ensure the new settings take effect.
+
+> To verify that Pi-hole is handling DNS requests, open the Query Log in the Pi-hole admin panel and browse the internet from the configured device. You should see DNS queries appear in real time.
+
+
+##### Workaround Option 3: Use Your Own Router (Bridge Mode Setup - Advanced)
+
+If your ISP-provided router is too restrictive — blocking custom DNS settings or disabling DHCP configuration — the most robust and future-proof solution is to use your own router.
+
+This involves placing your ISP’s modem/router combo into bridge mode, which disables its routing functions and passes the internet connection directly to your personal router. From there, you control everything: DNS, DHCP, firewall rules, VLANs, and more.
+
+**What This Setup Allows You to Do:**
+
+- Set Pi-hole as the default DNS server for your entire network
+
+- Fully customize your DHCP server settings (ranges, leases, static IPs, etc.)
+
+- Block or redirect traffic with firewall rules
+
+- Create isolated networks (e.g., IoT devices on their own VLAN)
+
+- Monitor traffic more accurately with tools like Grafana or Netflow exporters
+
+
+
+**Setup at a Glance:**
+
+1. Buy a standalone router that supports custom firmware or advanced DNS/DHCP settings
+(e.g., ASUS, TP-Link, Ubiquiti, Netgear with DD-WRT/OpenWRT support)
+
+2. Log into your ISP modem/router and enable bridge mode
+
+> This turns off its Wi-Fi, DHCP, and routing functions
+
+3. Connect your new router's WAN port to the bridged modem via Ethernet
+
+4. Set up your new router’s:
+
+	- WAN/Internet connection (should happen automatically)
+
+    - LAN IP range (e.g., 192.168.1.x or 10.0.0.x)
+
+    - DNS settings → point to your Pi-hole IP (e.g., <your_pi_ip_address>)
+
+    - DHCP server → define a clean range that excludes Pi-hole
+
+5. Reboot the network and enjoy
+
+
+**Pros:**
+
+- Total control of your network’s DNS, DHCP, firewall, and routing policies
+
+- Enables advanced features like VLANs, custom hostnames, and failover
+
+- Future-proof — no reliance on ISP’s limited firmware
+
+- Clean, consistent device logging in Pi-hole
+
+
+**Cons:**
+
+- Requires purchasing a standalone router
+
+- Initial setup can be more complex
+
+- May disable ISP-specific features like parental controls, phone lines, or mesh support
+
+- Some ISPs require calling support to activate bridge mode
+
+
+**Helpful Hints**
+
+1. Call your ISP if bridge mode isn't visible — some providers require remote activation.
+2. Secure your new router immediately with a strong admin password and firmware updates
+3. Test your DNS after setup using:
+```
+dig example.com @<your_pi_ip_address>
+```
+4. Avoid double NAT: once in bridge mode, make sure your ISP box isn’t still assigning internal IPs
