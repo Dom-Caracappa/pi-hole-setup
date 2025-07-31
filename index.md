@@ -1,3 +1,5 @@
+theme: jekyll-theme-minimal
+
 # Setting Up a Pi-Hole
 
 Turning your Raspberry Pi 4 into a Pi-hole server (and potentially expanding it to run other network services like DHCP, Unbound, or even a local dashboard) is a fantastic way to improve your home network and learn about networking fundamentals.
